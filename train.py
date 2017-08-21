@@ -28,7 +28,7 @@ def preprocess(state):
     gray = scipy.misc.imresize(gray, (42, 42)) / 255.0
     return torch.from_numpy(np.expand_dims(gray, 0)).float()
 
-def train(rank, args, shared_model, optimizer=None):
+def train(rank, args, shared_model, optimizer=None, icm=None):
     if rank == 0:
         configure(args.model, flush_secs=5)
 
@@ -67,6 +67,7 @@ def train(rank, args, shared_model, optimizer=None):
         log_probs = []
         rewards = []
         entropies = []
+        icm_loss = 0
 
         for step in range(args.num_steps):
             value, logit, (hx, cx) = model(
@@ -79,8 +80,13 @@ def train(rank, args, shared_model, optimizer=None):
             action = prob.multinomial().data
             log_prob = log_prob.gather(1, Variable(action))
 
-            state, reward, done, _ = env.step(action.numpy())
+            old_state, reward, done, _ = env.step(action.numpy())
             done = done or episode_length >= args.max_episode_length
+
+            _, icm_l, _ = icm(state, action, preprocess(old_state))
+            icm_loss += icm_l
+
+            state = old_state
             reward = max(min(reward, 1), -1)
             myR += reward
 
@@ -128,7 +134,8 @@ def train(rank, args, shared_model, optimizer=None):
 
         optimizer.zero_grad()
 
-        (policy_loss + 0.5 * value_loss).backward()
+        total_loss = (policy_loss + 0.5 * value_loss) + icm_loss
+        total_loss.backward()
         torch.nn.utils.clip_grad_norm(model.parameters(), 40)
 
         ensure_shared_grads(model, shared_model)

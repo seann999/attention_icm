@@ -118,19 +118,22 @@ class ICM(torch.nn.Module):
         return pred
 
     def forward(self, state_old, act, state_new):
+        state_old = Variable(state_old.unsqueeze(0))
+        state_new = Variable(state_new.unsqueeze(0))
+
         beta = 0.2
 
         rep_old = self.encoder(state_old).view(-1, rep_size)
         rep_new = self.encoder(state_new).view(-1, rep_size)
 
         act_onehot = Variable(torch.FloatTensor(act.size()[0], self.num_outputs).zero_())
-        act_onehot.scatter_(1, act.data, 1)
+        act_onehot.scatter_(1, act, 1)
 
         act_pred = self.inverse_model(rep_old, rep_new)
         state_pred = self.forward_model(Variable(rep_old.data), act_onehot)
 
         forward_loss = F.mse_loss(Variable(rep_new.data), state_pred)
         act = act.squeeze()
-        inverse_loss = F.cross_entropy(act_pred, act)
+        inverse_loss = F.cross_entropy(act_pred, Variable(act))
 
         return forward_loss, (1.0 - beta) * inverse_loss + beta * forward_loss, inverse_loss

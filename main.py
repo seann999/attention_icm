@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from model import ActorCritic
 from train import train
 import my_optim
+from model import ICM
 
 # Based on
 # https://github.com/pytorch/examples/tree/master/mnist_hogwild
@@ -55,6 +56,8 @@ if __name__ == '__main__':
         optimizer = my_optim.SharedAdam(shared_model.parameters(), lr=args.lr)
         optimizer.share_memory()
 
+    icm = ICM(1, 5)
+
     processes = []
 
     #p = mp.Process(target=test, args=(args.num_processes, args, shared_model))
@@ -64,7 +67,7 @@ if __name__ == '__main__':
     #train(0, args, shared_model, optimizer)
 
     for rank in range(0, args.num_processes):
-        p = mp.Process(target=train, args=(rank, args, shared_model, optimizer))
+        p = mp.Process(target=train, args=(rank, args, shared_model, optimizer, icm))
         p.start()
         processes.append(p)
     for p in processes:
