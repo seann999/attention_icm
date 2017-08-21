@@ -11,6 +11,8 @@ from torchvision import datasets, transforms
 from tensorboard_logger import configure, log_value
 
 import gym
+import numpy as np
+import scipy.misc
 
 def ensure_shared_grads(model, shared_model):
     for param, shared_param in zip(model.parameters(), shared_model.parameters()):
@@ -18,6 +20,13 @@ def ensure_shared_grads(model, shared_model):
             return
         shared_param._grad = param.grad
 
+def rgb2gray(rgb):
+    return np.dot(rgb[...,:3], [0.299, 0.587, 0.114])
+
+def preprocess(state):
+    gray = rgb2gray(state)
+    gray = scipy.misc.imresize(gray, (42, 42)) / 255.0
+    return torch.from_numpy(np.expand_dims(gray, 0)).float()
 
 def train(rank, args, shared_model, optimizer=None):
     if rank == 0:
@@ -28,7 +37,7 @@ def train(rank, args, shared_model, optimizer=None):
     env = gym.make(args.env_name)
     env.seed(args.seed + rank)
 
-    model = ActorCritic(env.observation_space.shape[0], env.action_space)
+    model = ActorCritic(1, 5)
 
     if optimizer is None:
         optimizer = optim.Adam(shared_model.parameters(), lr=args.lr)
@@ -36,12 +45,13 @@ def train(rank, args, shared_model, optimizer=None):
     model.train()
 
     state = env.reset()
-    state = torch.from_numpy(state)
+    state = preprocess(state)
+    #state = torch.from_numpy(state)
     done = True
 
     episode_length = 0
     episodes_done = 0
-    R = 0
+    myR = 0
     while True:
         episode_length += 1
         # Sync with the shared model
@@ -72,16 +82,20 @@ def train(rank, args, shared_model, optimizer=None):
             state, reward, done, _ = env.step(action.numpy())
             done = done or episode_length >= args.max_episode_length
             reward = max(min(reward, 1), -1)
-            R += reward
+            myR += reward
 
             if done:
-                log_value("return", R, episodes_done)
+                if rank == 0:
+                    log_value("return", myR, episodes_done)
+                
+                print(episodes_done, ": R=", myR)
                 episodes_done += 1
                 episode_length = 0
-                R = 0
+                myR = 0
                 state = env.reset()
 
-            state = torch.from_numpy(state)
+            state = preprocess(state)
+            #state = torch.from_numpy(state)
             values.append(value)
             log_probs.append(log_prob)
             rewards.append(reward)

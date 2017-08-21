@@ -60,6 +60,8 @@ if __name__ == '__main__':
     #p = mp.Process(target=test, args=(args.num_processes, args, shared_model))
     #p.start()
     #processes.append(p)
+    
+    #train(0, args, shared_model, optimizer)
 
     for rank in range(0, args.num_processes):
         p = mp.Process(target=train, args=(rank, args, shared_model, optimizer))
