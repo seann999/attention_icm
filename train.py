@@ -28,9 +28,14 @@ def preprocess(state):
     gray = scipy.misc.imresize(gray, (42, 42)) / 255.0
     return torch.from_numpy(np.expand_dims(gray, 0)).float()
 
-def train(rank, args, shared_model, optimizer=None, icm=None):
-    if rank == 0:
+def save_checkpoint(state, filename='checkpoint.pth'):
+    torch.save(state, filename)
+
+def train(rank, args, shared_model, icm, frames, optimizer=None):
+    try:
         configure(args.model, flush_secs=5)
+    except:
+        pass
 
     torch.manual_seed(args.seed + rank)
 
@@ -50,7 +55,7 @@ def train(rank, args, shared_model, optimizer=None, icm=None):
     done = True
 
     episode_length = 0
-    episodes_done = 0
+
     myR, myIR = 0, 0
     while True:
         episode_length += 1
@@ -82,6 +87,7 @@ def train(rank, args, shared_model, optimizer=None, icm=None):
 
             old_state, reward, done, _ = env.step(action.numpy())
             done = done or episode_length >= args.max_episode_length
+            frames.value += 1
 
             intrinsic_reward, icm_l, _ = icm(state, action, preprocess(old_state))
             icm_loss += icm_l
@@ -96,11 +102,10 @@ def train(rank, args, shared_model, optimizer=None, icm=None):
             reward = max(min(reward, 1), -1)
             
             if done:
-                if rank == 0:
-                    log_value("return", myR, episodes_done)
+                log_value("return", myR, frames.value)
                 
-                print(episodes_done, ": R=", myR, " IR=", myIR)
-                episodes_done += 1
+                print(frames.value, ": R=", myR, " IR=", myIR)
+
                 episode_length = 0
                 myR, myIR = 0, 0
                 state = env.reset()
@@ -110,6 +115,14 @@ def train(rank, args, shared_model, optimizer=None, icm=None):
             values.append(value)
             log_probs.append(log_prob)
             rewards.append(reward)
+
+            if frames.value % args.save_frames == 0:
+                save_checkpoint({
+                    'frames': frames.value,
+                    'a3c': shared_model.state_dict(),
+                    'icm': icm.state_dict(),
+                    'optimizer' : optimizer.state_dict(),
+                }, '{}/checkpoint-{}.pth'.format(args.model, frames.value))
 
             if done:
                 break
@@ -143,8 +156,7 @@ def train(rank, args, shared_model, optimizer=None, icm=None):
         total_loss.backward()
         torch.nn.utils.clip_grad_norm(model.parameters(), 40)
 
-        if rank == 0:
-            log_value("icm loss", icm_loss.data.numpy()[0], episodes_done)
+        log_value("icm loss", icm_loss.data.numpy()[0], frames.value)
 
         ensure_shared_grads(model, shared_model)
         optimizer.step()

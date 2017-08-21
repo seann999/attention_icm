@@ -13,6 +13,7 @@ from model import ActorCritic
 from train import train
 import my_optim
 from model import ICM
+import glob
 
 # Based on
 # https://github.com/pytorch/examples/tree/master/mnist_hogwild
@@ -37,6 +38,8 @@ parser.add_argument('--env-name', default='PongDeterministic-v4', metavar='ENV',
 parser.add_argument('--no-shared', default=False, metavar='O',
                     help='use an optimizer without shared momentum.')
 parser.add_argument('--model', type=str)
+parser.add_argument('--save_frames', type=int, default=1000,
+                    help='save every n frames')
 
 
 if __name__ == '__main__':
@@ -57,6 +60,24 @@ if __name__ == '__main__':
         optimizer.share_memory()
 
     icm = ICM(1, 5)
+    frames = mp.Value('i', 0)
+
+    ckpt_path = None
+    paths = glob.glob(os.path.join(args.model, "checkpoint-*"))
+    if len(paths) > 0:
+        paths.sort()
+        ckpt_path = paths[-1]
+
+    if ckpt_path and os.path.isfile(ckpt_path):
+        print("=> loading checkpoint '{}'".format(ckpt_path))
+        checkpoint = torch.load(ckpt_path)
+        frames.value = checkpoint['frames']
+        shared_model.load_state_dict(checkpoint['a3c'])
+        icm.load_state_dict(checkpoint['icm'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        print("=> loaded checkpoint '{}' (frame {})".format(ckpt_path, checkpoint['frames']))
+    else:
+        print("=> no checkpoint found at '{}'".format(args.model))
 
     processes = []
 
@@ -67,7 +88,7 @@ if __name__ == '__main__':
     #train(0, args, shared_model, optimizer)
 
     for rank in range(0, args.num_processes):
-        p = mp.Process(target=train, args=(rank, args, shared_model, optimizer, icm))
+        p = mp.Process(target=train, args=(rank, args, shared_model, icm, frames, optimizer))
         p.start()
         processes.append(p)
     for p in processes:
