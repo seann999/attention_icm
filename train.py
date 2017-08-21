@@ -51,7 +51,7 @@ def train(rank, args, shared_model, optimizer=None, icm=None):
 
     episode_length = 0
     episodes_done = 0
-    myR = 0
+    myR, myIR = 0, 0
     while True:
         episode_length += 1
         # Sync with the shared model
@@ -83,21 +83,26 @@ def train(rank, args, shared_model, optimizer=None, icm=None):
             old_state, reward, done, _ = env.step(action.numpy())
             done = done or episode_length >= args.max_episode_length
 
-            _, icm_l, _ = icm(state, action, preprocess(old_state))
+            intrinsic_reward, icm_l, _ = icm(state, action, preprocess(old_state))
             icm_loss += icm_l
 
-            state = old_state
-            reward = max(min(reward, 1), -1)
-            myR += reward
+            intrinsic_reward = intrinsic_reward.numpy()[0]
 
+            myR += reward
+            myIR += intrinsic_reward
+
+            state = old_state
+            reward += intrinsic_reward
+            reward = max(min(reward, 1), -1)
+            
             if done:
                 if rank == 0:
                     log_value("return", myR, episodes_done)
                 
-                print(episodes_done, ": R=", myR)
+                print(episodes_done, ": R=", myR, " IR=", myIR)
                 episodes_done += 1
                 episode_length = 0
-                myR = 0
+                myR, myIR = 0, 0
                 state = env.reset()
 
             state = preprocess(state)
@@ -137,6 +142,9 @@ def train(rank, args, shared_model, optimizer=None, icm=None):
         total_loss = 0.1 * (policy_loss + 0.5 * value_loss) + 10.0 * icm_loss
         total_loss.backward()
         torch.nn.utils.clip_grad_norm(model.parameters(), 40)
+
+        if rank == 0:
+            log_value("icm loss", icm_loss.data.numpy()[0], episodes_done)
 
         ensure_shared_grads(model, shared_model)
         optimizer.step()

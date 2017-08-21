@@ -136,4 +136,4 @@ class ICM(torch.nn.Module):
         act = act.squeeze()
         inverse_loss = F.cross_entropy(act_pred, Variable(act))
 
-        return forward_loss, (1.0 - beta) * inverse_loss + beta * forward_loss, inverse_loss
+        return forward_loss.data, (1.0 - beta) * inverse_loss + beta * forward_loss, inverse_loss.data
