@@ -31,7 +31,7 @@ def preprocess(state):
 def save_checkpoint(state, filename='checkpoint.pth'):
     torch.save(state, filename)
 
-def train(rank, args, shared_model, icm, frames, optimizer=None):
+def train(rank, args, shared_model, icm, frames, env, optimizer=None):
     try:
         configure(args.model, flush_secs=5)
     except:
@@ -39,7 +39,6 @@ def train(rank, args, shared_model, icm, frames, optimizer=None):
 
     torch.manual_seed(args.seed + rank)
 
-    env = gym.make(args.env_name)
     env.seed(args.seed + rank)
 
     model = ActorCritic(1, 5)

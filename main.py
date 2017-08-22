@@ -14,6 +14,7 @@ from train import train
 import my_optim
 from model import ICM
 import glob
+import my_env
 
 # Based on
 # https://github.com/pytorch/examples/tree/master/mnist_hogwild
@@ -41,6 +42,11 @@ parser.add_argument('--model', type=str)
 parser.add_argument('--save_frames', type=int, default=1000,
                     help='save every n frames')
 
+def atari():
+    return gym.make(args.env_name)
+
+def doom():
+    return my_env.DoomWrapper()
 
 if __name__ == '__main__':
     os.environ['OMP_NUM_THREADS'] = '1'  
@@ -88,7 +94,7 @@ if __name__ == '__main__':
     #train(0, args, shared_model, optimizer)
 
     for rank in range(0, args.num_processes):
-        p = mp.Process(target=train, args=(rank, args, shared_model, icm, frames, optimizer))
+        p = mp.Process(target=train, args=(rank, args, shared_model, icm, frames, doom(), optimizer))
         p.start()
         processes.append(p)
     for p in processes:
