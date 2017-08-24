@@ -10,7 +10,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.nn.functional as F
 from model import ActorCritic
-from train import train
+from train import train_model
 import my_optim
 from model import ICM
 import glob
@@ -38,17 +38,11 @@ parser.add_argument('--env-name', default='PongDeterministic-v4', metavar='ENV',
                     help='environment to train on (default: PongDeterministic-v4)')
 parser.add_argument('--no-shared', default=False, metavar='O',
                     help='use an optimizer without shared momentum.')
-parser.add_argument('--model', type=str)
+parser.add_argument('--model', default='runs/test00', type=str)
 parser.add_argument('--save_frames', type=int, default=1000,
                     help='save every n frames')
 
-def atari():
-    return gym.make(args.env_name)
-
-def doom():
-    return my_env.DoomWrapper()
-
-if __name__ == '__main__':
+def main():
     os.environ['OMP_NUM_THREADS'] = '1'  
   
     args = parser.parse_args()
@@ -56,7 +50,7 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
 
     #env = create_atari_env(args.env_name)
-    shared_model = ActorCritic(1, 5)
+    shared_model = ActorCritic(my_env.DoomWrapper.input_channels, my_env.DoomWrapper.action_size)
     shared_model.share_memory()
 
     if args.no_shared:
@@ -65,7 +59,7 @@ if __name__ == '__main__':
         optimizer = my_optim.SharedAdam(shared_model.parameters(), lr=args.lr)
         optimizer.share_memory()
 
-    icm = ICM(1, 5)
+    icm = ICM(my_env.DoomWrapper.input_channels, my_env.DoomWrapper.action_size)
     frames = mp.Value('i', 0)
 
     ckpt_path = None
@@ -87,15 +81,12 @@ if __name__ == '__main__':
 
     processes = []
 
-    #p = mp.Process(target=test, args=(args.num_processes, args, shared_model))
-    #p.start()
-    #processes.append(p)
-    
-    #train(0, args, shared_model, optimizer)
-
     for rank in range(0, args.num_processes):
-        p = mp.Process(target=train, args=(rank, args, shared_model, icm, frames, doom(), optimizer))
+        p = mp.Process(target=train_model, args=(rank, args, shared_model, icm, frames, optimizer,))
         p.start()
         processes.append(p)
     for p in processes:
         p.join()
+
+if __name__ == '__main__':
+    main()

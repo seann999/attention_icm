@@ -13,6 +13,7 @@ from tensorboard_logger import configure, log_value
 import gym
 import numpy as np
 import scipy.misc
+import my_env
 
 def ensure_shared_grads(model, shared_model):
     for param, shared_param in zip(model.parameters(), shared_model.parameters()):
@@ -20,18 +21,15 @@ def ensure_shared_grads(model, shared_model):
             return
         shared_param._grad = param.grad
 
-def rgb2gray(rgb):
-    return np.dot(rgb[...,:3], [0.299, 0.587, 0.114])
-
 def preprocess(state):
-    gray = rgb2gray(state)
-    gray = scipy.misc.imresize(gray, (42, 42)) / 255.0
-    return torch.from_numpy(np.expand_dims(gray, 0)).float()
+    return torch.from_numpy(state).float()
 
 def save_checkpoint(state, filename='checkpoint.pth'):
     torch.save(state, filename)
 
-def train(rank, args, shared_model, icm, frames, env, optimizer=None):
+def train_model(rank, args, shared_model, icm, frames, optimizer=None):
+    env = my_env.DoomWrapper()
+
     try:
         configure(args.model, flush_secs=5)
     except:
@@ -41,7 +39,7 @@ def train(rank, args, shared_model, icm, frames, env, optimizer=None):
 
     env.seed(args.seed + rank)
 
-    model = ActorCritic(1, 5)
+    model = ActorCritic(env.input_channels, env.action_size)
 
     if optimizer is None:
         optimizer = optim.Adam(shared_model.parameters(), lr=args.lr)
@@ -86,20 +84,9 @@ def train(rank, args, shared_model, icm, frames, env, optimizer=None):
 
             old_state, reward, done, _ = env.step(action.numpy())
             done = done or episode_length >= args.max_episode_length
+
             frames.value += 1
 
-            intrinsic_reward, icm_l, _ = icm(state, action, preprocess(old_state))
-            icm_loss += icm_l
-
-            intrinsic_reward = intrinsic_reward.numpy()[0]
-
-            myR += reward
-            myIR += intrinsic_reward
-
-            state = old_state
-            reward += intrinsic_reward
-            reward = max(min(reward, 1), -1)
-            
             if done:
                 log_value("return", myR, frames.value)
                 
@@ -108,12 +95,25 @@ def train(rank, args, shared_model, icm, frames, env, optimizer=None):
                 episode_length = 0
                 myR, myIR = 0, 0
                 state = env.reset()
+                state = preprocess(state)
+            else:
+                intrinsic_reward, icm_l, _ = icm(state, action, preprocess(old_state))
+                icm_loss += icm_l
 
-            state = preprocess(state)
-            #state = torch.from_numpy(state)
-            values.append(value)
-            log_probs.append(log_prob)
-            rewards.append(reward)
+                intrinsic_reward = intrinsic_reward.numpy()[0]
+
+                myR += reward
+                myIR += intrinsic_reward
+
+                state = old_state
+                reward += intrinsic_reward
+                reward = max(min(reward, 1), -1)
+
+                state = preprocess(state)
+                #state = torch.from_numpy(state)
+                values.append(value)
+                log_probs.append(log_prob)
+                rewards.append(reward)
 
             if frames.value % args.save_frames == 0:
                 save_checkpoint({
