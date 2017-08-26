@@ -96,6 +96,20 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
 
             frames.value += 1
 
+            old_states.append(state)
+            actions.append(action)
+            new_states.append(preprocess(old_state))
+
+            myR += reward
+            state = old_state
+
+            reward = max(min(reward, 1.0), -1.0)
+            
+            state = preprocess(state)
+            values.append(value)
+            log_probs.append(log_prob)
+            rewards.append(reward)
+
             if done:
                 if rank == 0:
                   log_value("return", myR, frames.value)
@@ -107,30 +121,6 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
                 myR, myIR = 0, 0
                 state = env.reset()
                 state = preprocess(state)
-            else:
-                old_states.append(state)
-                actions.append(action)
-                new_states.append(preprocess(old_state))
-                #intrinsic_reward, icm_l, inv_loss = icm(Variable(state), Variable(action), Variable(preprocess(old_state)))
-                #icm_loss += icm_l
-
-                #intrinsic_reward = intrinsic_reward.data.numpy()[0, 0]
-                #intrinsic_reward *= 0.01
-                myR += reward
-                #myIR += intrinsic_reward
-                #print(reward, intrinsic_reward)
-                state = old_state
-                #print(reward)
-                #reward += intrinsic_reward
-                #print(intrinsic_reward, reward)
-                reward = max(min(reward, 1.0), -1.0)
-                
-                state = preprocess(state)
-                #state = torch.from_numpy(state)
-                values.append(value)
-                log_probs.append(log_prob)
-                #print(rewards)
-                rewards.append(reward)
 
             if frames.value % args.save_frames == 0:
                 save_checkpoint({
