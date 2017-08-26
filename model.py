@@ -10,7 +10,7 @@ from torch.autograd import Variable
 
 def normalized_columns_initializer(weights, std=1.0):
     out = torch.randn(weights.size())
-    out *= std / torch.sqrt(out.pow(2).sum(1).unsqueeze(1).expand_as(out))
+    out *= std / torch.sqrt(out.pow(2).sum(1).expand_as(out))
     return out
 
 
@@ -61,12 +61,13 @@ class ActorCritic(torch.nn.Module):
         self.train()
 
     def forward(self, inputs):
+        #print("a")
         inputs, (hx, cx) = inputs
         x = F.elu(self.conv1(inputs))
         x = F.elu(self.conv2(x))
         x = F.elu(self.conv3(x))
         x = F.elu(self.conv4(x))
-
+        #print("b")
         x = x.view(-1, 32 * 3 * 3)
         hx, cx = self.lstm(x, (hx, cx))
         x = hx
@@ -118,22 +119,22 @@ class ICM(torch.nn.Module):
         return pred
 
     def forward(self, state_old, act, state_new):
-        state_old = Variable(state_old.unsqueeze(0))
-        state_new = Variable(state_new.unsqueeze(0))
+        state_old = state_old.unsqueeze(0)
+        state_new = state_new.unsqueeze(0)
 
         beta = 0.2
 
         rep_old = self.encoder(state_old).view(-1, rep_size)
         rep_new = self.encoder(state_new).view(-1, rep_size)
 
-        act_onehot = Variable(torch.FloatTensor(act.size()[0], self.num_outputs).zero_())
-        act_onehot.scatter_(1, act, 1)
+        act_onehot = torch.FloatTensor(act.size()[0], self.num_outputs).zero_()
+        act_onehot.scatter_(1, act.data, 1)
 
         act_pred = self.inverse_model(rep_old, rep_new)
-        state_pred = self.forward_model(Variable(rep_old.data), act_onehot)
+        state_pred = self.forward_model(Variable(rep_old.data), Variable(act_onehot))
 
-        forward_loss = F.mse_loss(Variable(rep_new.data), state_pred)
+        forward_loss = (Variable(rep_new.data) - state_pred).pow(2).sum(1).mean(0)
         act = act.squeeze()
-        inverse_loss = F.cross_entropy(act_pred, Variable(act))
+        inverse_loss = F.cross_entropy(act_pred, act)
 
-        return forward_loss.data, (1.0 - beta) * inverse_loss + beta * forward_loss, inverse_loss.data
+        return forward_loss, (1.0 - beta) * inverse_loss + beta * forward_loss, inverse_loss.data

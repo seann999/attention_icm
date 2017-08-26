@@ -30,10 +30,8 @@ def save_checkpoint(state, filename='checkpoint.pth'):
 def train_model(rank, args, shared_model, icm, frames, optimizer=None):
     env = my_env.DoomWrapper()
 
-    try:
+    if rank == 0:
         configure(args.model, flush_secs=5)
-    except:
-        pass
 
     torch.manual_seed(args.seed + rank)
 
@@ -55,6 +53,7 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
 
     myR, myIR = 0, 0
     while True:
+        #print(episode_length)
         episode_length += 1
         # Sync with the shared model
         model.load_state_dict(shared_model.state_dict())
@@ -72,6 +71,7 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
         icm_loss = 0
 
         for step in range(args.num_steps):
+            #print(step)
             value, logit, (hx, cx) = model(
                 (Variable(state.unsqueeze(0)), (hx, cx)))
             prob = F.softmax(logit)
@@ -88,7 +88,8 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
             frames.value += 1
 
             if done:
-                log_value("return", myR, frames.value)
+                if rank == 0:
+                  log_value("return", myR, frames.value)
                 
                 print(frames.value, ": R=", myR, " IR=", myIR)
 
@@ -97,22 +98,25 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
                 state = env.reset()
                 state = preprocess(state)
             else:
-                intrinsic_reward, icm_l, _ = icm(state, action, preprocess(old_state))
+                intrinsic_reward, icm_l, _ = icm(Variable(state), Variable(action), Variable(preprocess(old_state)))
                 icm_loss += icm_l
 
-                intrinsic_reward = intrinsic_reward.numpy()[0]
-
+                intrinsic_reward = intrinsic_reward.data.numpy()[0, 0]
+                intrinsic_reward *= 0.1
                 myR += reward
                 myIR += intrinsic_reward
-
+                #print(reward, intrinsic_reward)
                 state = old_state
+                #print(reward)
                 reward += intrinsic_reward
-                reward = max(min(reward, 1), -1)
-
+                #print(intrinsic_reward, reward)
+                reward = max(min(reward, 1.0), -1.0)
+                
                 state = preprocess(state)
                 #state = torch.from_numpy(state)
                 values.append(value)
                 log_probs.append(log_prob)
+                #print(rewards)
                 rewards.append(reward)
 
             if frames.value % args.save_frames == 0:
@@ -137,7 +141,8 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
         R = Variable(R)
         gae = torch.zeros(1, 1)
         for i in reversed(range(len(rewards))):
-            R = args.gamma * R + rewards[i]
+            #print(rewards[i])
+            R = args.gamma * R + float(rewards[i])#Variable(torch.from_numpy(np.array(rewards[i])))
             advantage = R - values[i]
             value_loss = value_loss + 0.5 * advantage.pow(2)
 
@@ -151,11 +156,22 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
 
         optimizer.zero_grad()
 
-        total_loss = 0.1 * (policy_loss + 0.5 * value_loss) + 10.0 * icm_loss
-        total_loss.backward()
-        torch.nn.utils.clip_grad_norm(model.parameters(), 40)
+        if len(rewards) > 0:
+          try:
+            total_loss = 0.1 * (policy_loss + 0.5 * value_loss) + 10.0 * icm_loss
+            #total_loss /= len(rewards)
+            total_loss.backward()
+            torch.nn.utils.clip_grad_norm(model.parameters(), 40)
 
-        log_value("icm loss", icm_loss.data.numpy()[0], frames.value)
+            if rank == 0:
+              log_value("icm loss", icm_loss.data.numpy()[0], frames.value)
+              log_value("value loss", value_loss.data.numpy()[0], frames.value)
+              log_value("policy loss", policy_loss.data.numpy()[0], frames.value)
 
-        ensure_shared_grads(model, shared_model)
-        optimizer.step()
+            ensure_shared_grads(model, shared_model)
+            optimizer.step()
+          except Exception as e:
+            print(policy_loss, value_loss, icm_loss)
+            print(e)
+            exit()
+
