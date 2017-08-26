@@ -39,7 +39,7 @@ parser.add_argument('--env-name', default='PongDeterministic-v4', metavar='ENV',
 parser.add_argument('--no-shared', default=True, metavar='O',
                     help='use an optimizer without shared momentum.')
 parser.add_argument('--model', default='runs/test00', type=str)
-parser.add_argument('--save_frames', type=int, default=1000,
+parser.add_argument('--save_frames', type=int, default=1000000,
                     help='save every n frames')
 
 def main():

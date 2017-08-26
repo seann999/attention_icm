@@ -116,7 +116,7 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
 
                 #intrinsic_reward = intrinsic_reward.data.numpy()[0, 0]
                 #intrinsic_reward *= 0.01
-                #myR += reward
+                myR += reward
                 #myIR += intrinsic_reward
                 #print(reward, intrinsic_reward)
                 state = old_state
@@ -153,16 +153,16 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
         value_loss = 0
         R = Variable(R)
 
-        old_states = torch.from_numpy(np.array(old_states))
-        actions = torch.from_numpy(np.array(actions))
-        new_states = torch.from_numpy(np.array(new_states))
-        print(old_states.size(), actions.size())
-        intrinsic_rewards, icm_loss, inv_loss = icm(Variable(old_states), Variable(actions), Variable(preprocess(new_states)))
+        old_states = torch.stack(old_states)
+        actions = torch.cat(actions)
+        new_states = torch.stack(new_states)
+        #print(old_states.size(), actions.size())
+        intrinsic_rewards, icm_loss, inv_loss = icm(Variable(old_states), Variable(actions), Variable(new_states))
 
         gae = torch.zeros(1, 1)
         for i in reversed(range(len(rewards))):
             #print(rewards[i])
-            R = args.gamma * R + float(rewards[i] + intrinsic_rewards[i])
+            R = args.gamma * R + float(rewards[i] + 0.01 * intrinsic_rewards.data.numpy()[i])
             advantage = R - values[i]
             value_loss = value_loss + 0.5 * advantage.pow(2)
 
