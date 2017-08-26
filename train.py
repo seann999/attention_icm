@@ -15,6 +15,8 @@ import numpy as np
 import scipy.misc
 import my_env
 
+from model import ICM
+
 def ensure_shared_grads(model, shared_model):
     for param, shared_param in zip(model.parameters(), shared_model.parameters()):
         if shared_param.grad is not None:
@@ -28,6 +30,10 @@ def save_checkpoint(state, filename='checkpoint.pth'):
     torch.save(state, filename)
 
 def train_model(rank, args, shared_model, icm, frames, optimizer=None):
+    if icm is None:
+      icm = ICM(my_env.DoomWrapper.input_channels, my_env.DoomWrapper.action_size) 
+      print("init local icm")
+
     env = my_env.DoomWrapper()
 
     if rank == 0:
@@ -90,6 +96,7 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
             if done:
                 if rank == 0:
                   log_value("return", myR, frames.value)
+                  log_value("intrinsic return", myIR, frames.value)
                 
                 print(frames.value, ": R=", myR, " IR=", myIR)
 
@@ -98,11 +105,11 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
                 state = env.reset()
                 state = preprocess(state)
             else:
-                intrinsic_reward, icm_l, _ = icm(Variable(state), Variable(action), Variable(preprocess(old_state)))
+                intrinsic_reward, icm_l, inv_loss = icm(Variable(state), Variable(action), Variable(preprocess(old_state)))
                 icm_loss += icm_l
 
                 intrinsic_reward = intrinsic_reward.data.numpy()[0, 0]
-                intrinsic_reward *= 0.1
+                intrinsic_reward *= 0.01
                 myR += reward
                 myIR += intrinsic_reward
                 #print(reward, intrinsic_reward)
@@ -158,15 +165,17 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
 
         if len(rewards) > 0:
           try:
-            total_loss = 0.1 * (policy_loss + 0.5 * value_loss) + 10.0 * icm_loss
+            total_loss = (policy_loss + 0.5 * value_loss) + 10.0 * icm_loss
             #total_loss /= len(rewards)
             total_loss.backward()
             torch.nn.utils.clip_grad_norm(model.parameters(), 40)
 
             if rank == 0:
-              log_value("icm loss", icm_loss.data.numpy()[0], frames.value)
-              log_value("value loss", value_loss.data.numpy()[0], frames.value)
-              log_value("policy loss", policy_loss.data.numpy()[0], frames.value)
+              n = len(rewards)
+              log_value("icm loss", icm_loss.data.numpy()[0] / n, frames.value)
+              log_value("value loss", value_loss.data.numpy()[0] / n, frames.value)
+              log_value("policy loss", policy_loss.data.numpy()[0] / n, frames.value)
+              log_value("inv loss", inv_loss.numpy()[0], frames.value)
 
             ensure_shared_grads(model, shared_model)
             optimizer.step()

@@ -84,12 +84,16 @@ class ICM(torch.nn.Module):
         self.encoder = nn.Sequential(
             nn.Conv2d(num_inputs, 32, 3, stride=2, padding=1),
             torch.nn.ELU(),
+            #torch.nn.BatchNorm2d(32),
             nn.Conv2d(32, 32, 3, stride=2, padding=1),
             torch.nn.ELU(),
+            #torch.nn.BatchNorm2d(32),
             nn.Conv2d(32, 32, 3, stride=2, padding=1),
             torch.nn.ELU(),
+            #torch.nn.BatchNorm2d(32),
             nn.Conv2d(32, 32, 3, stride=2, padding=1),
-            torch.nn.ELU()   
+            torch.nn.ELU(),
+            #torch.nn.BatchNorm2d(32)
         )
 
         self.num_outputs  = action_space#.n
@@ -133,7 +137,7 @@ class ICM(torch.nn.Module):
         act_pred = self.inverse_model(rep_old, rep_new)
         state_pred = self.forward_model(Variable(rep_old.data), Variable(act_onehot))
 
-        forward_loss = (Variable(rep_new.data) - state_pred).pow(2).sum(1).mean(0)
+        forward_loss = (Variable(rep_new.data) - state_pred).pow(2).mean(1).mean(0)
         act = act.squeeze()
         inverse_loss = F.cross_entropy(act_pred, act)
 
