@@ -123,8 +123,8 @@ class ICM(torch.nn.Module):
         return pred
 
     def forward(self, state_old, act, state_new):
-        state_old = state_old.unsqueeze(0)
-        state_new = state_new.unsqueeze(0)
+        #state_old = state_old.unsqueeze(0)
+        #state_new = state_new.unsqueeze(0)
 
         beta = 0.2
 
@@ -137,8 +137,9 @@ class ICM(torch.nn.Module):
         act_pred = self.inverse_model(rep_old, rep_new)
         state_pred = self.forward_model(Variable(rep_old.data), Variable(act_onehot))
 
-        forward_loss = (Variable(rep_new.data) - state_pred).pow(2).mean(1).mean(0)
+        bonuses = (Variable(rep_new.data) - state_pred).pow(2).mean(1)
+        forward_loss = bonuses.mean(0)
         act = act.squeeze()
         inverse_loss = F.cross_entropy(act_pred, act)
 
-        return forward_loss, (1.0 - beta) * inverse_loss + beta * forward_loss, inverse_loss.data
+        return bonuses.data, (1.0 - beta) * inverse_loss + beta * forward_loss, inverse_loss.data

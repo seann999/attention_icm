@@ -75,6 +75,9 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
         rewards = []
         entropies = []
         icm_loss = 0
+        old_states = []
+        new_states = []
+        actions = []
 
         for step in range(args.num_steps):
             #print(step)
@@ -96,26 +99,29 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
             if done:
                 if rank == 0:
                   log_value("return", myR, frames.value)
-                  log_value("intrinsic return", myIR, frames.value)
+                  #log_value("intrinsic return", myIR, frames.value)
                 
-                print(frames.value, ": R=", myR, " IR=", myIR)
+                print(frames.value, ": R=", myR)
 
                 episode_length = 0
                 myR, myIR = 0, 0
                 state = env.reset()
                 state = preprocess(state)
             else:
-                intrinsic_reward, icm_l, inv_loss = icm(Variable(state), Variable(action), Variable(preprocess(old_state)))
-                icm_loss += icm_l
+                old_states.append(state)
+                actions.append(action)
+                new_states.append(preprocess(old_state))
+                #intrinsic_reward, icm_l, inv_loss = icm(Variable(state), Variable(action), Variable(preprocess(old_state)))
+                #icm_loss += icm_l
 
-                intrinsic_reward = intrinsic_reward.data.numpy()[0, 0]
-                intrinsic_reward *= 0.01
-                myR += reward
-                myIR += intrinsic_reward
+                #intrinsic_reward = intrinsic_reward.data.numpy()[0, 0]
+                #intrinsic_reward *= 0.01
+                #myR += reward
+                #myIR += intrinsic_reward
                 #print(reward, intrinsic_reward)
                 state = old_state
                 #print(reward)
-                reward += intrinsic_reward
+                #reward += intrinsic_reward
                 #print(intrinsic_reward, reward)
                 reward = max(min(reward, 1.0), -1.0)
                 
@@ -146,10 +152,17 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
         policy_loss = 0
         value_loss = 0
         R = Variable(R)
+
+        old_states = torch.from_numpy(np.array(old_states))
+        actions = torch.from_numpy(np.array(actions))
+        new_states = torch.from_numpy(np.array(new_states))
+        print(old_states.size(), actions.size())
+        intrinsic_rewards, icm_loss, inv_loss = icm(Variable(old_states), Variable(actions), Variable(preprocess(new_states)))
+
         gae = torch.zeros(1, 1)
         for i in reversed(range(len(rewards))):
             #print(rewards[i])
-            R = args.gamma * R + float(rewards[i])#Variable(torch.from_numpy(np.array(rewards[i])))
+            R = args.gamma * R + float(rewards[i] + intrinsic_rewards[i])
             advantage = R - values[i]
             value_loss = value_loss + 0.5 * advantage.pow(2)
 
