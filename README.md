@@ -4,6 +4,11 @@ Main implementation is finished, but correctness still needs to be confirmed by 
 
 A lot of the A3C code comes from [this repository](https://github.com/ikostrikov/pytorch-a3c).
 
+## Main Dependencies
+* PyTorch
+* ViZDoom
+* OpenAI Gym
+
 ## Running
 Example
 
