@@ -41,6 +41,7 @@ parser.add_argument('--no-shared', default=True, metavar='O',
 parser.add_argument('--model', default='runs/test00', type=str)
 parser.add_argument('--save_frames', type=int, default=1000000,
                     help='save every n frames')
+parser.add_argument('--icm', type=bool, help='use ICM')
 
 def main():
     os.environ['OMP_NUM_THREADS'] = '1'  
@@ -49,7 +50,6 @@ def main():
 
     torch.manual_seed(args.seed)
 
-    #env = create_atari_env(args.env_name)
     shared_model = ActorCritic(my_env.DoomWrapper.input_channels, my_env.DoomWrapper.action_size)
     shared_model.share_memory()
 
@@ -59,7 +59,7 @@ def main():
         optimizer = my_optim.SharedAdam(shared_model.parameters(), lr=args.lr)
         optimizer.share_memory()
 
-    #icm = ICM(my_env.DoomWrapper.input_channels, my_env.DoomWrapper.action_size)
+    icm = ICM(my_env.DoomWrapper.input_channels, my_env.DoomWrapper.action_size)
     frames = mp.Value('i', 0)
 
     ckpt_path = None
@@ -73,7 +73,7 @@ def main():
         checkpoint = torch.load(ckpt_path)
         frames.value = checkpoint['frames']
         shared_model.load_state_dict(checkpoint['a3c'])
-        #icm.load_state_dict(checkpoint['icm'])
+        icm.load_state_dict(checkpoint['icm'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         print("=> loaded checkpoint '{}' (frame {})".format(ckpt_path, checkpoint['frames']))
     else:
@@ -82,7 +82,7 @@ def main():
     processes = []
 
     for rank in range(0, args.num_processes):
-        p = mp.Process(target=train_model, args=(rank, args, shared_model, None, frames, optimizer,))
+        p = mp.Process(target=train_model, args=(rank, args, shared_model, icm, frames, optimizer,))
         p.start()
         processes.append(p)
     for p in processes:

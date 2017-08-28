@@ -59,7 +59,6 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
 
     myR, myIR = 0, 0
     while True:
-        #print(episode_length)
         episode_length += 1
         # Sync with the shared model
         model.load_state_dict(shared_model.state_dict())
@@ -80,7 +79,6 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
         actions = []
 
         for step in range(args.num_steps):
-            #print(step)
             value, logit, (hx, cx) = model(
                 (Variable(state.unsqueeze(0)), (hx, cx)))
             prob = F.softmax(logit)
@@ -91,17 +89,17 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
             action = prob.multinomial().data
             log_prob = log_prob.gather(1, Variable(action))
 
-            old_state, reward, done, _ = env.step(action.numpy())
+            new_state, reward, done, _ = env.step(action.numpy())
             done = done or episode_length >= args.max_episode_length
 
             frames.value += 1
 
             old_states.append(state)
             actions.append(action)
-            new_states.append(preprocess(old_state))
+            new_states.append(preprocess(new_state))
 
             myR += reward
-            state = old_state
+            state = new_state
 
             reward = max(min(reward, 1.0), -1.0)
             
@@ -146,13 +144,14 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
         old_states = torch.stack(old_states)
         actions = torch.cat(actions)
         new_states = torch.stack(new_states)
-        #print(old_states.size(), actions.size())
         intrinsic_rewards, icm_loss, inv_loss = icm(Variable(old_states), Variable(actions), Variable(new_states))
 
         gae = torch.zeros(1, 1)
+
+        icm_coef = 1.0 if args.icm else 0.0
+
         for i in reversed(range(len(rewards))):
-            #print(rewards[i])
-            R = args.gamma * R + float(rewards[i] + 0.01 * intrinsic_rewards.data.numpy()[i])
+            R = args.gamma * R + float(rewards[i] + icm_coef * intrinsic_rewards.data.numpy()[i])
             advantage = R - values[i]
             value_loss = value_loss + 0.5 * advantage.pow(2)
 
@@ -166,24 +165,17 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
 
         optimizer.zero_grad()
 
-        if len(rewards) > 0:
-          try:
-            total_loss = (policy_loss + 0.5 * value_loss) + 10.0 * icm_loss
-            #total_loss /= len(rewards)
-            total_loss.backward()
-            torch.nn.utils.clip_grad_norm(model.parameters(), 40)
+        total_loss = (policy_loss + 0.5 * value_loss) + 10.0 * icm_loss
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm(model.parameters(), 40)
 
-            if rank == 0:
-              n = len(rewards)
-              log_value("icm loss", icm_loss.data.numpy()[0] / n, frames.value)
-              log_value("value loss", value_loss.data.numpy()[0] / n, frames.value)
-              log_value("policy loss", policy_loss.data.numpy()[0] / n, frames.value)
-              log_value("inv loss", inv_loss.numpy()[0], frames.value)
+        if rank == 0:
+            n = len(rewards)
+            log_value("icm loss", icm_loss.data.numpy()[0] / n, frames.value)
+            log_value("value loss", value_loss.data.numpy()[0] / n, frames.value)
+            log_value("policy loss", policy_loss.data.numpy()[0] / n, frames.value)
+            log_value("inv loss", inv_loss.numpy()[0] / n, frames.value)
 
-            ensure_shared_grads(model, shared_model)
-            optimizer.step()
-          except Exception as e:
-            print(policy_loss, value_loss, icm_loss)
-            print(e)
-            exit()
+        ensure_shared_grads(model, shared_model)
+        optimizer.step()
 
