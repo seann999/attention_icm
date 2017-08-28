@@ -123,9 +123,6 @@ class ICM(torch.nn.Module):
         return pred
 
     def forward(self, state_old, act, state_new):
-        #state_old = state_old.unsqueeze(0)
-        #state_new = state_new.unsqueeze(0)
-
         beta = 0.2
 
         rep_old = self.encoder(state_old).view(-1, rep_size)

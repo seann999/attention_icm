@@ -29,11 +29,7 @@ def preprocess(state):
 def save_checkpoint(state, filename='checkpoint.pth'):
     torch.save(state, filename)
 
-def train_model(rank, args, shared_model, icm, frames, optimizer=None):
-    if icm is None:
-      icm = ICM(my_env.DoomWrapper.input_channels, my_env.DoomWrapper.action_size) 
-      print("init local icm")
-
+def train_model(rank, args, shared_model, shared_icm, frames, optimizer=None):
     env = my_env.DoomWrapper()
 
     if rank == 0:
@@ -44,9 +40,10 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
     env.seed(args.seed + rank)
 
     model = ActorCritic(env.input_channels, env.action_size)
+    icm = ICM(my_env.DoomWrapper.input_channels, my_env.DoomWrapper.action_size) 
 
     if optimizer is None:
-        optimizer = optim.Adam(shared_model.parameters(), lr=args.lr)
+        optimizer = optim.Adam(list(shared_model.parameters()) + list(shared_icm.parameters()), lr=args.lr)
 
     model.train()
 
@@ -62,6 +59,8 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
         episode_length += 1
         # Sync with the shared model
         model.load_state_dict(shared_model.state_dict())
+        icm.load_state_dict(shared_icm.state_dict())
+
         if done:
             cx = Variable(torch.zeros(1, 256))
             hx = Variable(torch.zeros(1, 256))
@@ -124,7 +123,7 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
                 save_checkpoint({
                     'frames': frames.value,
                     'a3c': shared_model.state_dict(),
-                    'icm': icm.state_dict(),
+                    'icm': shared_icm.state_dict(),
                     'optimizer' : optimizer.state_dict(),
                 }, '{}/checkpoint-{}.pth'.format(args.model, frames.value))
 
@@ -177,5 +176,6 @@ def train_model(rank, args, shared_model, icm, frames, optimizer=None):
             log_value("inv loss", inv_loss.numpy()[0] / n, frames.value)
 
         ensure_shared_grads(model, shared_model)
+        ensure_shared_grads(icm, shared_icm)
         optimizer.step()
 
