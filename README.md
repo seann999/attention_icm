@@ -6,5 +6,7 @@ A lot of the A3C code comes from [This repository](https://github.com/ikostrikov
 
 ## Running
 Example
+
 ```python3 main.py --num-processes=16 --model=runs/test00 --icm=True```
+
 Other parameters are also available
