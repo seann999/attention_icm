@@ -10,7 +10,7 @@ from torch.autograd import Variable
 
 def normalized_columns_initializer(weights, std=1.0):
     out = torch.randn(weights.size())
-    out *= std / torch.sqrt(out.pow(2).sum(1).expand_as(out))
+    out *= std / torch.sqrt(out.pow(2).sum(1, keepdim=True))
     return out
 
 
@@ -101,7 +101,7 @@ class ICM(torch.nn.Module):
         self.act_pred = nn.Sequential(
             nn.Linear(32 * 3 * 3 * 2, 256),
             torch.nn.ELU(),
-            nn.Linear(256, self.num_outputs )
+            nn.Linear(256, self.num_outputs)
         )
 
         self.state_pred = nn.Sequential(
@@ -123,7 +123,7 @@ class ICM(torch.nn.Module):
         return pred
 
     def forward(self, state_old, act, state_new):
-        beta = 0.2
+        forward_loss_wt = 0.2
 
         rep_old = self.encoder(state_old).view(-1, rep_size)
         rep_new = self.encoder(state_new).view(-1, rep_size)
@@ -139,4 +139,22 @@ class ICM(torch.nn.Module):
         act = act.squeeze()
         inverse_loss = F.cross_entropy(act_pred, act)
 
-        return Variable(bonuses.data), (1.0 - beta) * inverse_loss + beta * forward_loss, inverse_loss.data
+        return (1.0 - forward_loss_wt) * inverse_loss + forward_loss_wt * forward_loss, inverse_loss.data, forward_loss.data
+
+    def calc_bonus(self, state_old, act, state_new):
+        state_old = Variable(state_old.unsqueeze(0))
+        state_new = Variable(state_new.unsqueeze(0))
+
+        rep_old = self.encoder(state_old).view(-1, rep_size)
+        rep_new = self.encoder(state_new).view(-1, rep_size)
+
+        act_onehot = Variable(torch.FloatTensor(act.size()[0], self.num_outputs).zero_())
+        act_onehot.scatter_(1, act, 1)
+
+        prediction_beta = 0.01
+
+        state_pred = self.forward_model(Variable(rep_old.data), act_onehot)
+        forward_loss = 0.5 * torch.mean((Variable(rep_new.data) - state_pred)**2.0)
+        forward_loss = forward_loss * 288.0
+
+        return forward_loss.data * prediction_beta

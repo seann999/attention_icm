@@ -41,14 +41,14 @@ parser.add_argument('--no-shared', default=True, metavar='O',
 parser.add_argument('--model', default='runs/test00', type=str)
 parser.add_argument('--save_frames', type=int, default=1000000,
                     help='save every n frames')
-parser.add_argument('--icm', type=bool, help='use ICM')
+parser.add_argument('--icm', type=int, default=1, help='use ICM')
 
 def main():
     os.environ['OMP_NUM_THREADS'] = '1'  
   
     args = parser.parse_args()
 
-    torch.manual_seed(args.seed)
+    #torch.manual_seed(args.seed)
 
     shared_model = ActorCritic(my_env.DoomWrapper.input_channels, my_env.DoomWrapper.action_size)
     shared_model.share_memory()
