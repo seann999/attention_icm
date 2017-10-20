@@ -9,13 +9,12 @@ from model import ActorCritic
 from torch.autograd import Variable
 from torchvision import datasets, transforms
 from tensorboard_logger import configure, log_value
+import cv2
 
 import gym
 import numpy as np
 import scipy.misc
 import my_env
-
-from model import ICM
 
 def ensure_shared_grads(model, shared_model):
     for param, shared_param in zip(model.parameters(), shared_model.parameters()):
@@ -29,26 +28,30 @@ def preprocess(state):
 def save_checkpoint(state, filename='checkpoint.pth'):
     torch.save(state, filename)
 
-def train_model(rank, args, shared_model, shared_icm, frames, optimizer=None):
-    env = my_env.DoomWrapper()
-
+def train_model(rank, args, shared_model, frames, optimizer=None, ckpt_optimizer=None):
     if rank == 0:
-        configure(args.model, flush_secs=5)
+        cv2.namedWindow("frame", cv2.WINDOW_NORMAL)
+
+    env = my_env.DoomWrapper(my_env.DoomWrapper.train_action_repeat)
+    #env = my_env.AtariWrapper(args)
 
     torch.manual_seed(args.seed + rank)
 
     env.seed(args.seed + rank)
 
     model = ActorCritic(env.input_channels, env.action_size)
-    icm = ICM(my_env.DoomWrapper.input_channels, my_env.DoomWrapper.action_size) 
 
     if optimizer is None:
-        optimizer = optim.Adam(list(shared_model.parameters()) + list(shared_icm.parameters()), lr=args.lr)
+        optimizer = optim.Adam(shared_model.parameters(), lr=args.lr)
+        if ckpt_optimizer is not None:
+            print("loaded checkpoint optimizer")
+            optimizer.load_state_dict(ckpt_optimizer)
 
     model.train()
 
     state = env.reset()
     state = preprocess(state)
+
     #state = torch.from_numpy(state)
     done = True
 
@@ -59,7 +62,6 @@ def train_model(rank, args, shared_model, shared_icm, frames, optimizer=None):
         episode_length += 1
         # Sync with the shared model
         model.load_state_dict(shared_model.state_dict())
-        icm.load_state_dict(shared_icm.state_dict())
 
         if done:
             cx = Variable(torch.zeros(1, 256))
@@ -93,14 +95,36 @@ def train_model(rank, args, shared_model, shared_icm, frames, optimizer=None):
 
             frames.value += 1
 
+            if frames.value % args.save_frames == 0:
+                save_checkpoint({
+                    'frames': frames.value,
+                    'a3c': shared_model.state_dict(),
+                    'optimizer' : optimizer.state_dict(),
+                }, '{}/checkpoint-{}.pth'.format(args.model, str(frames.value).zfill(10)))
+
+
+            raw_new_state = new_state
             new_state = preprocess(new_state)
 
             old_states.append(state)
             actions.append(action)
             new_states.append(new_state)
 
-            intrinsic_reward = icm.calc_bonus(state, action, new_state)
+            intrinsic_reward = model.calc_bonus(state, action, new_state)
             intrinsic_reward = intrinsic_reward.numpy()[0]
+
+            if rank == 0:
+                h = 300
+                w = 300
+                canvas = np.zeros([h, w*2, 3])
+                canvas[:,:w, :] = cv2.resize(raw_new_state[0], (h, h))[:,:,np.newaxis]
+                cv2.rectangle(canvas,(w+30,h//2),(w+80,int(h//2-intrinsic_reward*100.0)),(0,0,1), -1)
+                cv2.rectangle(canvas,(w+30,h//2),(w+80,int(h//2-intrinsic_reward*1000.0)),(0,0,1), 1)
+                cv2.rectangle(canvas,(w+100,h//2),(w+150,int(h//2-reward*100.0)),(1,0,0), -1)
+                cv2.rectangle(canvas,(w+170,h//2),(w+230,int(h//2-(reward+intrinsic_reward)*100.0)),(0,1,0), -1)
+                cv2.line(canvas, (w,h//2), (w*2,h//2), (1,1,1))
+                cv2.imshow("frame", canvas)
+                cv2.waitKey(1)
 
             myR += reward
             myIR += intrinsic_reward
@@ -117,24 +141,16 @@ def train_model(rank, args, shared_model, shared_icm, frames, optimizer=None):
             rewards.append(reward)
 
             if done:
-                if rank == 0:
-                  log_value("return", myR, frames.value)
-                  log_value("intrinsic return", myIR, frames.value)
+                #if rank == 0:
+                log_value("return", myR, frames.value)
+                log_value("intrinsic return", myIR, frames.value)
                 
                 print(frames.value, ": R=", myR, "IR=", myIR)
 
                 episode_length = 0
                 myR, myIR = 0, 0
                 state = env.reset()
-                state = preprocess(state)
-
-            if frames.value % args.save_frames == 0:
-                save_checkpoint({
-                    'frames': frames.value,
-                    'a3c': shared_model.state_dict(),
-                    'icm': shared_icm.state_dict(),
-                    'optimizer' : optimizer.state_dict(),
-                }, '{}/checkpoint-{}.pth'.format(args.model, frames.value))
+                state = preprocess(state)  
 
             if done:
                 break
@@ -155,8 +171,6 @@ def train_model(rank, args, shared_model, shared_icm, frames, optimizer=None):
 
         gae = torch.zeros(1, 1)
 
-        icm_coef = float(args.icm)
-
         for i in reversed(range(len(rewards))):
             R = args.gamma * R + rewards[i]
             advantage = R - values[i]
@@ -170,22 +184,28 @@ def train_model(rank, args, shared_model, shared_icm, frames, optimizer=None):
             policy_loss = policy_loss - \
                 log_probs[i] * Variable(gae) - 0.01 * entropies[i]
 
-        icm_loss, inv_loss, for_loss = icm(Variable(old_states), Variable(actions), Variable(new_states))
+        icm_loss, inv_loss, for_loss, inv_acc = model.icm(Variable(old_states), Variable(actions), Variable(new_states))
 
         optimizer.zero_grad()
 
-        total_loss = (policy_loss + 0.5 * value_loss) + icm_coef * 10.0 * icm_loss
+        total_loss = (policy_loss + 0.5 * value_loss) + 10.0 * icm_loss
         total_loss.backward()
+        #(policy_loss + 0.5 * value_loss).backward(retain_graph=True)
+        #(10.0 * icm_loss).backward()
+
+        for p in model.parameters():
+            p.grad.data.mul_(20)
         torch.nn.utils.clip_grad_norm(model.parameters(), 40)
 
         if rank == 0:
             n = len(rewards)
-            log_value("icm loss", icm_loss.data.numpy()[0] / n, frames.value)
+            log_value("icm loss", icm_loss.data.numpy()[0], frames.value)
             log_value("value loss", value_loss.data.numpy()[0] / n, frames.value)
             log_value("policy loss", policy_loss.data.numpy()[0] / n, frames.value)
-            log_value("inv loss", inv_loss.numpy()[0] / n, frames.value)
+            log_value("inv loss", inv_loss.numpy()[0], frames.value)
+            log_value("for loss", for_loss.numpy()[0], frames.value)
+            log_value("inv acc", inv_acc.numpy()[0], frames.value)
 
         ensure_shared_grads(model, shared_model)
-        ensure_shared_grads(icm, shared_icm)
         optimizer.step()
 

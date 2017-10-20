@@ -3,7 +3,7 @@ from __future__ import print_function
 import argparse
 import os
 import sys
-
+import time
 import torch
 import torch.optim as optim
 import torch.multiprocessing as mp
@@ -11,10 +11,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from model import ActorCritic
 from train import train_model
+from test import test_model
 import my_optim
-from model import ICM
 import glob
 import my_env
+from tensorboard_logger import configure
 
 # Based on
 # https://github.com/pytorch/examples/tree/master/mnist_hogwild
@@ -28,7 +29,7 @@ parser.add_argument('--tau', type=float, default=1.00, metavar='T',
                     help='parameter for GAE (default: 1.00)')
 parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
-parser.add_argument('--num-processes', type=int, default=4, metavar='N',
+parser.add_argument('--num-processes', type=int, default=16, metavar='N',
                     help='how many training processes to use (default: 4)')
 parser.add_argument('--num-steps', type=int, default=20, metavar='NS',
                     help='number of forward steps in A3C (default: 20)')
@@ -38,8 +39,9 @@ parser.add_argument('--env-name', default='PongDeterministic-v4', metavar='ENV',
                     help='environment to train on (default: PongDeterministic-v4)')
 parser.add_argument('--no-shared', default=True, metavar='O',
                     help='use an optimizer without shared momentum.')
+
 parser.add_argument('--model', default='runs/test00', type=str)
-parser.add_argument('--save_frames', type=int, default=1000000,
+parser.add_argument('--save_frames', type=int, default=100000,
                     help='save every n frames')
 parser.add_argument('--icm', type=int, default=1, help='use ICM')
 
@@ -50,20 +52,21 @@ def main():
 
     #torch.manual_seed(args.seed)
 
-    shared_model = ActorCritic(my_env.DoomWrapper.input_channels, my_env.DoomWrapper.action_size)
+    env = my_env.DoomWrapper
+
+    shared_model = ActorCritic(env.input_channels, env.action_size)
     shared_model.share_memory()
-    shared_icm = ICM(my_env.DoomWrapper.input_channels, my_env.DoomWrapper.action_size)
-    shared_icm.share_memory()
 
     if args.no_shared:
         optimizer = None
     else:
-        optimizer = my_optim.SharedAdam(list(shared_model.parameters()) + list(shared_icm.parameters()), lr=args.lr)
+        optimizer = my_optim.SharedAdam(shared_model.parameters(), lr=args.lr)
         optimizer.share_memory()
 
     frames = mp.Value('i', 0)
 
     ckpt_path = None
+    ckpt_optimizer = None
     paths = glob.glob(os.path.join(args.model, "checkpoint-*"))
     if len(paths) > 0:
         paths.sort()
@@ -74,16 +77,21 @@ def main():
         checkpoint = torch.load(ckpt_path)
         frames.value = checkpoint['frames']
         shared_model.load_state_dict(checkpoint['a3c'])
-        shared_icm.load_state_dict(checkpoint['icm'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
+        ckpt_optimizer = checkpoint['optimizer']
         print("=> loaded checkpoint '{}' (frame {})".format(ckpt_path, checkpoint['frames']))
     else:
         print("=> no checkpoint found at '{}'".format(args.model))
 
     processes = []
 
+    configure(args.model, flush_secs=5)
+
+    p = mp.Process(target=test_model, args=(-1, args, shared_model, frames))
+    p.start()
+    processes.append(p)
+
     for rank in range(0, args.num_processes):
-        p = mp.Process(target=train_model, args=(rank, args, shared_model, shared_icm, frames, optimizer,))
+        p = mp.Process(target=train_model, args=(rank, args, shared_model, frames, optimizer, ckpt_optimizer))
         p.start()
         processes.append(p)
     for p in processes:

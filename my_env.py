@@ -9,9 +9,10 @@ def rgb2gray(rgb):
 
 class DoomWrapper:
     input_channels = 4
-    action_size = 3
+    action_size = 4
+    train_action_repeat = 4
 
-    def __init__(self):
+    def __init__(self, action_repeat):
         try:
             game = DoomGame()
             game.load_config("/home/sean/ViZDoom/scenarios/my_way_home.cfg")
@@ -21,8 +22,10 @@ class DoomWrapper:
             print(e)
 
         self.game = game
-        self.n_step = 0
         self.last_state = None
+        self.past_states = []
+
+        self.action_repeat = action_repeat
 
     def seed(self, seed):
         self.game.set_seed(seed)
@@ -34,41 +37,77 @@ class DoomWrapper:
             return self.last_state
 
         state = np.array(state.screen_buffer)
-        state = rgb2gray(state)
-        state = scipy.misc.imresize(state, (42, 42)) / 255.0
+        state = scipy.misc.imresize(state, (42, 42))
+        state = rgb2gray(state) / 255.0
         #state = np.moveaxis(state, 2, 0)
         self.last_state = np.expand_dims(state, 0)
 
         return self.last_state
 
     def reset(self):
+        self.past_states = []
         self.game.new_episode()
         state = self.get_state()
+        self.past_states.append(state)
 
         return np.concatenate([state]*4)
 
     def step(self, action):
-        reward = 0
+        self.game.set_action([1 if i == action else 0 for i in range(DoomWrapper.action_size-1)])
+        self.game.advance_action(self.action_repeat)
+        reward = self.game.get_last_reward()
+        self.past_states.append(self.get_state())
+        
         states = []
-        self.game.set_action([1 if i == action else 0 for i in range(DoomWrapper.action_size)])
-         
-        for _ in range(4):
-          self.game.advance_action(1)
-          reward += self.game.get_last_reward()
-          new_state = self.get_state()
-          states.append(new_state)
-          
+
+        past = 4
+        for i in range(past):
+            states.append(self.past_states[max(-1-i*DoomWrapper.train_action_repeat//self.action_repeat, -len(self.past_states))])
+
         state = np.concatenate(states)
+
+        reward = max(reward, 0)
 
         return state, reward, self.game.is_episode_finished(), None
 
 class AtariWrapper:
+    input_channels = 4
+    action_size = 6
+
     def __init__(self, args):
-        game = gym.make(args.env_name)
+        self.game = gym.make(args.env_name)
+        self.last_state = None
+        self.past_states = []
 
     def seed(self, seed):
-        pass
+        self.game.seed(seed)
+
+    def process(self, state):
+        state = scipy.misc.imresize(state, (42, 42))
+        state = rgb2gray(state) / 255.0
+        self.last_state = np.expand_dims(state, 0)
+
+        return self.last_state
 
     def reset(self):
-        pass
+        self.past_states = []
+        state = self.process(self.game.reset())
+        self.past_states.append(state)
+
+        return np.concatenate([state]*4)
+
+    def step(self, action):
+        new_state, reward, done, _ = self.game.step(action)
+        new_state = self.process(new_state)
+        self.past_states.append(new_state)
+        
+        states = []
+
+        past = 4
+        for i in range(past):
+            states.append(self.past_states[max(-1-i, -len(self.past_states))])
+
+        state = np.concatenate(states)
+
+        return state, reward, done, None
  
