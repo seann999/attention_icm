@@ -10,7 +10,6 @@ def rgb2gray(rgb):
 class DoomWrapper:
     input_channels = 4
     action_size = 4
-    train_action_repeat = 4
 
     def __init__(self, action_repeat):
         try:
@@ -22,53 +21,56 @@ class DoomWrapper:
             print(e)
 
         self.game = game
-        self.last_state = None
-        self.past_states = []
 
         self.action_repeat = action_repeat
+
+        self.buffer = []
+        self.obs_buffer = []
 
     def seed(self, seed):
         self.game.set_seed(seed)
 
-    def get_state(self):
-        state = self.game.get_state()
-        
-        if not state:
-            return self.last_state
+    def preprocess(obs):
+        obs = np.array(obs)
+        self.obs_buffer.append(obs)
+        max_frame = np.max(np.stack(self.obs_buffer), 0)
+        obs = scipy.misc.imresize(max_frame, (42, 42))
+        obs = rgb2gray(obs) / 255.0
 
-        state = np.array(state.screen_buffer)
-        state = scipy.misc.imresize(state, (42, 42))
-        state = rgb2gray(state) / 255.0
-        #state = np.moveaxis(state, 2, 0)
-        self.last_state = np.expand_dims(state, 0)
-
-        return self.last_state
+        return obs
 
     def reset(self):
-        self.past_states = []
+        self.obs_buffer = []
         self.game.new_episode()
-        state = self.get_state()
-        self.past_states.append(state)
+        obs = preprocess(self.game.get_state())
+        self.buffer = []
+        for _ in range(DoomWrapper.input_channels):
+            self.buffer.append(np.zeros_like(obs))
 
-        return np.concatenate([state]*4)
+        return np.concatenate(states)
 
     def step(self, action):
         self.game.set_action([1 if i == action else 0 for i in range(DoomWrapper.action_size-1)])
-        self.game.advance_action(self.action_repeat)
-        reward = self.game.get_last_reward()
-        self.past_states.append(self.get_state())
+
+        total_reward = 0
+
+        for _ in range(self.action_repeat):
+            self.game.advance_action(1)
+            reward = self.game.get_last_reward()
+            reward = max(reward, 0)
+            obs = preprocess(self.game.get_state())
+            total_reward += reward
+        self.buffer.append(obs)
         
         states = []
 
         past = 4
         for i in range(past):
-            states.append(self.past_states[max(-1-i*DoomWrapper.train_action_repeat//self.action_repeat, -len(self.past_states))])
+            states.append(self.buffer[max(-1-i, -len(self.buffer))])
 
         state = np.concatenate(states)
 
-        reward = max(reward, 0)
-
-        return state, reward, self.game.is_episode_finished(), None
+        return state, total_reward, self.game.is_episode_finished(), None
 
 class AtariWrapper:
     input_channels = 4

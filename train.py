@@ -32,7 +32,7 @@ def train_model(rank, args, shared_model, frames, optimizer=None, ckpt_optimizer
     if rank == 0:
         cv2.namedWindow("frame", cv2.WINDOW_NORMAL)
 
-    env = my_env.DoomWrapper(my_env.DoomWrapper.train_action_repeat)
+    env = my_env.DoomWrapper(4)
     #env = my_env.AtariWrapper(args)
 
     torch.manual_seed(args.seed + rank)
